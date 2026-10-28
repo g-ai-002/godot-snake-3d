@@ -1,0 +1,195 @@
+name: 🚀 构建与发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+run-name: 🐍 构建贪吃蛇 3D · ${{ github.ref_name }}
+
+concurrency:
+  group: build-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: '4.7.2'
+  APP_NAME: ${{ github.event.repository.name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    name: 📋 准备版本信息
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v6
+
+      - name: 🔢 解析版本号
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(grep -oP 'config/version="\K[^"]+' project.godot | head -1)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            raw_tag="${{ github.ref_name }}"
+            tagged=$(echo "$raw_tag" | sed -E 's/^[vV]//')
+            if [ -n "$tagged" ]; then
+              version="$tagged"
+            fi
+          fi
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
+          echo "📌 使用的版本号: $version"
+
+  test:
+    needs: [ metadata ]
+    runs-on: ubuntu-latest
+    name: 🧪 运行冒烟测试
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v6
+
+      - name: 🧰 安装 Godot
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fsSL --retry 3 --retry-delay 5 -o godot.zip "${BASE}/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          chmod +x "Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          echo "GODOT=$PWD/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$GITHUB_ENV"
+          echo "✅ Godot 已就绪"
+
+      - name: 📥 导入资源
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . --import
+
+      - name: ✅ 运行冒烟测试
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . res://tests/smoke_test.tscn
+
+  build-windows:
+    needs: [ metadata, test ]
+    runs-on: windows-latest
+    name: 🪟 构建 Windows ZIP
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v6
+
+      - name: 🧰 安装 Godot 与导出模板
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fsSL --retry 3 --retry-delay 5 -o godot.zip "${BASE}/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
+          7z x -y godot.zip > /dev/null
+          echo "GODOT=$PWD/Godot_v${GODOT_VERSION}-stable_win64_console.exe" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 --retry-delay 5 -o templates.tpz "${BASE}/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$APPDATA/Godot/export_templates"
+          7z x -y templates.tpz -o"$APPDATA/Godot/export_templates" > /dev/null
+          mv "$APPDATA/Godot/export_templates/templates" "$APPDATA/Godot/export_templates/${GODOT_VERSION}.stable"
+          echo "✅ Godot 与导出模板已就绪"
+
+      - name: 📥 导入资源
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . --import
+
+      - name: 🩺 打印构建环境
+        run: |
+          echo "=== 🌍 构建环境 ==="
+          echo "GODOT=${GODOT}"
+          echo "APP_NAME=${APP_NAME}"
+          echo "GODOT_VERSION=${GODOT_VERSION}"
+          ls -la "$APPDATA/Godot/export_templates/${GODOT_VERSION}.stable" | head -5
+
+      - name: 🪟 导出 Windows
+        run: |
+          set -euo pipefail
+          mkdir -p build/windows
+          "$GODOT" --headless --path . --export-release "Windows Desktop" "build/windows/Snake3D.exe"
+          cp README.md build/windows/
+          echo "📊 导出产物："
+          ls -lh build/windows
+
+      - name: 🗜️ 打包 Windows ZIP
+        shell: pwsh
+        run: |
+          Write-Host "🗜️ 正在创建 ZIP 包..."
+          Compress-Archive -Path build\windows\* -DestinationPath windows.zip
+          $zipSizeMB = [math]::Round((Get-Item windows.zip).Length / 1MB, 2)
+          Write-Host "✅ ZIP 创建完成: windows.zip ($zipSizeMB MB)"
+
+      - name: 📝 重命名 Windows ZIP
+        run: |
+          set -euo pipefail
+          mv windows.zip "./${APP_NAME}-${{ needs.metadata.outputs.app_version }}-windows-x86_64.zip"
+          ls -lh ./*.zip
+
+      - name: ⬆️ 上传 Windows 产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APP_NAME }}-${{ needs.metadata.outputs.app_version }}
+          path: ${{ env.APP_NAME }}-${{ needs.metadata.outputs.app_version }}-windows-x86_64.zip
+          retention-days: 1
+
+  release:
+    needs: [ build-windows ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    name: 🚀 发布 GitHub Release
+    permissions:
+      contents: write
+    environment: release
+    steps:
+      - name: 📥 检出代码（用于生成更新日志）
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ⬇️ 下载构建产物
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 📝 生成发布说明
+        id: notes
+        run: |
+          set -euo pipefail
+          current_tag=${GITHUB_REF#refs/tags/}
+          prev_tag=$(git tag --sort=-version:refname | grep -v "^$current_tag$" | head -1 || true)
+          body_content=""
+          if [[ -n "$prev_tag" ]]; then
+            body_content=$(git log --pretty=format:"* %s (%h)" "$prev_tag".."$current_tag" -- . ":(exclude)docs" ":(exclude).github")
+          else
+            body_content="首次发布。"
+          fi
+          echo "=== 📝 生成的发布说明 ==="
+          echo "$body_content"
+          {
+            echo "body<<EOF"
+            echo "$body_content"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 🚀 发布 GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/*
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

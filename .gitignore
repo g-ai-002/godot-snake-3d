@@ -1,0 +1,14 @@
+# Godot 4 生成目录
+.godot/
+export/
+build/
+
+# 导出产物
+*.exe
+*.pck
+*.zip
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.tmp
