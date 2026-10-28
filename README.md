@@ -57,9 +57,11 @@ godot --path .
 无头冒烟测试覆盖关卡生成、吃食物、道具、护盾、传送门、暂停、重开与音频合成：
 
 ```bash
+godot --headless --path . --import
 godot --headless --path . res://tests/smoke_test.tscn
 ```
 
+首次运行（或删除 `.godot` 后）需先执行 `--import` 生成全局类缓存，CI 已包含这一步。
 测试场景为 `tests/smoke_test.tscn`，共 59 项断言，退出码非 0 表示失败。
 
 ## 导出
