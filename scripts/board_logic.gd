@@ -46,13 +46,14 @@ static func clear_spawn_row(walls: Dictionary, cols: int, rows: int) -> void:
 		walls.erase(Vector2i(x, mid))
 
 
+## 索引 0 是蛇头，其余依次向后拖尾；朝向与 spawn 行的 RIGHT 起步方向保持一致。
 static func spawn_body(cols: int, rows: int) -> Array[Vector2i]:
 	var center := int(cols * 0.5)
 	var mid := int(rows * 0.5)
 	var body: Array[Vector2i] = [
-		Vector2i(center - 2, mid),
-		Vector2i(center - 1, mid),
 		Vector2i(center, mid),
+		Vector2i(center - 1, mid),
+		Vector2i(center - 2, mid),
 	]
 	return body
 

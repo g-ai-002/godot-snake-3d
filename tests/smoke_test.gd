@@ -92,6 +92,24 @@ func _test_game_flow() -> void:
 	game.rows = 20
 	game.start_game()
 	game.set_process(false)
+
+	# 出生点：蛇头在前、身体在后，倒计时结束第一格不得自撞
+	for size in [15, 20, 25]:
+		var spawned := BoardLogic.spawn_body(size, size)
+		var center := int(size * 0.5)
+		_check(spawned[0] == Vector2i(center, center), "出生蛇头位于中心/%d" % size)
+		_check(spawned[1].x < spawned[0].x, "出生身体位于蛇头后方/%d" % size)
+
+	game.level_index = BoardLogic.Level.OPEN
+	game._setup_board()
+	game.state = STATE_PLAYING
+	game.queued.clear()
+	game.food_cell = Vector2i(1, 1)
+	game.food_kind = ""
+	game._tick()
+	_check(game.state == STATE_PLAYING, "出生后首格前进不自撞")
+	_check(game.cells[0] == Vector2i(11, 10), "出生蛇头向右推进一格")
+
 	game.state = STATE_PLAYING
 	game.countdown = 0.0
 	game.cells = _cells([Vector2i(10, 10), Vector2i(9, 10), Vector2i(8, 10)])
@@ -106,6 +124,7 @@ func _test_game_flow() -> void:
 	_check(game.cells.size() == 4, "吃到食物后长度 +1")
 	_check(game.score == 10, "普通食物得 10 分")
 	_check(game.cells[0] == Vector2i(11, 10), "蛇头前进一格")
+	_check(game.rig.shake == 0.0, "吃食物不抖动镜头")
 
 	game.food_cell = Vector2i(12, 10)
 	game.food_kind = "speed_up"
