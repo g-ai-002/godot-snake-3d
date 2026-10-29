@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://scripts/game.gd" id="1_game"]
 [ext_resource type="Script" path="res://scripts/board_view.gd" id="2_board"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/snake_view.gd" id="4_snake"]
 [ext_resource type="Script" path="res://scripts/camera_rig.gd" id="5_rig"]
 [ext_resource type="Script" path="res://scripts/hud.gd" id="6_hud"]
+[ext_resource type="Script" path="res://scripts/postfx.gd" id="7_postfx"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_game")
@@ -24,7 +25,12 @@ script = ExtResource("5_rig")
 
 [node name="Camera3D" type="Camera3D" parent="CameraRig"]
 
+[node name="PostFx" type="CanvasLayer" parent="."]
+layer = 1
+script = ExtResource("7_postfx")
+
 [node name="UI" type="CanvasLayer" parent="."]
+layer = 2
 
 [node name="HUD" type="Control" parent="UI"]
 layout_mode = 3

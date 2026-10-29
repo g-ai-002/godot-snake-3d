@@ -8,6 +8,7 @@ const BODY_Y := 0.46
 const POPUP_POOL_SIZE := 8
 const BURST_POOL_SIZE := 6
 const BURST_AMOUNT := 44
+const SKY_SHADER := preload("res://shaders/sky.gdshader")
 
 const EFFECT_DURATIONS := {
 	"speed_up": 6.0,
@@ -73,8 +74,13 @@ var _touch_origin := Vector2.ZERO
 var _orbiting := false
 var _environment: Environment
 var _sky_material: ProceduralSkyMaterial
+var _sky_shader_material: ShaderMaterial
 var _key_light: DirectionalLight3D
+var _rim_light: DirectionalLight3D
 var _fill_light: OmniLight3D
+var _dust: GPUParticles3D
+var _dust_process: ParticleProcessMaterial
+var _dust_material: StandardMaterial3D
 
 # 飘字与爆散粒子常驻复用，避免每次吃食物都新建节点/材质/网格造成掉帧。
 var _popup_pool: Array[Label3D] = []
@@ -87,12 +93,15 @@ var _burst_index := 0
 @onready var food_view: FoodView = $Food
 @onready var rig: CameraRig = $CameraRig
 @onready var hud: HudView = $UI/HUD
+@onready var postfx: PostFx = $PostFx
 
 
 func _ready() -> void:
 	rng.randomize()
 	_load_settings()
 	_build_environment()
+	_build_lights()
+	_build_atmosphere()
 	_warm_effects()
 
 	hud.start_pressed.connect(start_game)
@@ -128,51 +137,163 @@ func _load_settings() -> void:
 	best = SaveData.best
 
 
+func _is_forward_plus() -> bool:
+	return RenderingServer.get_current_rendering_method() == "forward_plus"
+
+
 func _build_environment() -> void:
 	_environment = Environment.new()
 	_environment.background_mode = Environment.BG_SKY
-	_sky_material = ProceduralSkyMaterial.new()
+
 	var sky := Sky.new()
-	sky.sky_material = _sky_material
+	if _is_forward_plus() or RenderingServer.get_current_rendering_method() == "mobile":
+		_sky_shader_material = ShaderMaterial.new()
+		_sky_shader_material.shader = SKY_SHADER
+		sky.sky_material = _sky_shader_material
+	else:
+		# GL Compatibility 不支持 sky 着色器的部分特性，回退到程序化天空
+		_sky_material = ProceduralSkyMaterial.new()
+		sky.sky_material = _sky_material
 	_environment.sky = sky
+
 	_environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	_environment.ambient_light_sky_contribution = 0.85
-	_environment.ambient_light_energy = 0.9
+	_environment.ambient_light_sky_contribution = 0.9
+	_environment.ambient_light_energy = 0.35
+	_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	_environment.background_energy_multiplier = 0.55
 	_environment.tonemap_mode = Environment.TONE_MAPPER_ACES
-	_environment.tonemap_exposure = 1.05
+	_environment.tonemap_exposure = 1.08
+	_environment.tonemap_white = 6.0
+
 	_environment.glow_enabled = true
-	_environment.glow_intensity = 0.85
-	_environment.glow_bloom = 0.12
-	_environment.glow_hdr_threshold = 0.9
+	_environment.glow_intensity = 0.9
+	_environment.glow_strength = 1.15
+	_environment.glow_bloom = 0.16
+	_environment.glow_hdr_threshold = 0.85
+	_environment.glow_hdr_scale = 2.0
 	_environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
-	_environment.ssao_enabled = true
-	_environment.ssao_radius = 1.6
-	_environment.ssao_intensity = 1.8
+	var levels := [0.0, 0.45, 1.0, 1.0, 0.75, 0.45, 0.2]
+	for i in levels.size():
+		_environment.set_glow_level(i, levels[i])
+
 	_environment.fog_enabled = true
-	_environment.fog_density = 0.008
-	_environment.fog_sky_affect = 0.25
+	_environment.fog_light_color = Color("#0a1424")
+	_environment.fog_light_energy = 0.5
+	_environment.fog_density = 0.0018
+	_environment.fog_sky_affect = 0.15
+	_environment.fog_height = 0.6
+	_environment.fog_height_density = 0.03
+	_environment.fog_aerial_perspective = 0.35
+
+	if _is_forward_plus():
+		_environment.ssao_enabled = true
+		_environment.ssao_radius = 1.5
+		_environment.ssao_intensity = 2.4
+		_environment.ssao_power = 1.5
+		_environment.ssao_light_affect = 0.3
+
+		_environment.ssr_enabled = true
+		_environment.ssr_max_steps = 56
+		_environment.ssr_fade_in = 0.12
+		_environment.ssr_fade_out = 0.2
+		_environment.ssr_depth_tolerance = 0.25
+
+		_environment.volumetric_fog_enabled = true
+		_environment.volumetric_fog_density = 0.0035
+		_environment.volumetric_fog_albedo = Color(0.3, 0.42, 0.5)
+		_environment.volumetric_fog_anisotropy = 0.35
+		_environment.volumetric_fog_length = 90.0
+		_environment.volumetric_fog_detail_spread = 1.6
+		_environment.volumetric_fog_ambient_inject = 0.1
+		_environment.volumetric_fog_sky_affect = 0.1
+		_environment.volumetric_fog_temporal_reprojection_enabled = true
+
 	_environment.adjustment_enabled = true
-	_environment.adjustment_saturation = 1.06
-	_environment.adjustment_contrast = 1.03
+	_environment.adjustment_brightness = 1.0
+	_environment.adjustment_contrast = 1.1
+	_environment.adjustment_saturation = 1.18
 
 	var world := WorldEnvironment.new()
 	world.environment = _environment
 	add_child(world)
 
+
+func _build_lights() -> void:
 	_key_light = DirectionalLight3D.new()
 	_key_light.rotation_degrees = Vector3(-52.0, -38.0, 0.0)
-	_key_light.light_energy = 1.25
+	_key_light.light_energy = 1.7
 	_key_light.light_color = Color("#fff1dd")
 	_key_light.shadow_enabled = true
-	_key_light.directional_shadow_max_distance = 90.0
+	_key_light.directional_shadow_max_distance = 80.0
+	_key_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	_key_light.directional_shadow_blend_splits = true
+	_key_light.shadow_bias = 0.03
+	_key_light.shadow_normal_bias = 1.2
 	add_child(_key_light)
 
+	# 冷色边缘光从反方向打来，把蛇和墙从背景里“抠”出来
+	_rim_light = DirectionalLight3D.new()
+	_rim_light.rotation_degrees = Vector3(-24.0, 142.0, 0.0)
+	_rim_light.light_energy = 0.75
+	_rim_light.light_color = Color("#7cc8ff")
+	_rim_light.shadow_enabled = false
+	add_child(_rim_light)
+
 	_fill_light = OmniLight3D.new()
-	_fill_light.position = Vector3(0.0, 11.0, 0.0)
-	_fill_light.omni_range = 70.0
-	_fill_light.light_energy = 0.75
+	_fill_light.position = Vector3(0.0, 12.0, 0.0)
+	_fill_light.omni_range = 80.0
+	_fill_light.light_energy = 0.55
+	_fill_light.light_volumetric_fog_energy = 0.4
 	add_child(_fill_light)
+
+
+func _build_atmosphere() -> void:
+	_dust_process = ParticleProcessMaterial.new()
+	_dust_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	_dust_process.emission_box_extents = Vector3(14.0, 3.5, 14.0)
+	_dust_process.direction = Vector3(0.0, 1.0, 0.0)
+	_dust_process.spread = 60.0
+	_dust_process.initial_velocity_min = 0.05
+	_dust_process.initial_velocity_max = 0.22
+	_dust_process.gravity = Vector3(0.0, 0.02, 0.0)
+	_dust_process.scale_min = 0.4
+	_dust_process.scale_max = 1.2
+	_dust_process.lifetime_randomness = 0.7
+
+	var ramp := Gradient.new()
+	ramp.offsets = PackedFloat32Array([0.0, 0.3, 0.75, 1.0])
+	ramp.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.9),
+		Color(1.0, 1.0, 1.0, 0.7),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var ramp_texture := GradientTexture1D.new()
+	ramp_texture.gradient = ramp
+	_dust_process.color_ramp = ramp_texture
+
+	_dust_material = StandardMaterial3D.new()
+	_dust_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_dust_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_dust_material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_dust_material.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+
+	var mote := SphereMesh.new()
+	mote.radius = 0.022
+	mote.height = 0.044
+	mote.radial_segments = 6
+	mote.rings = 3
+	mote.material = _dust_material
+
+	_dust = GPUParticles3D.new()
+	_dust.amount = 140
+	_dust.lifetime = 14.0
+	_dust.preprocess = 6.0
+	_dust.process_material = _dust_process
+	_dust.draw_pass_1 = mote
+	_dust.position = Vector3(0.0, 3.2, 0.0)
+	_dust.visibility_aabb = AABB(Vector3(-30.0, -6.0, -30.0), Vector3(60.0, 12.0, 60.0))
+	add_child(_dust)
 
 
 func _process(delta: float) -> void:
@@ -205,7 +326,20 @@ func _process(delta: float) -> void:
 		if go_timer <= 0.0:
 			hud.hide_countdown()
 
+	_update_theme_energy()
 	_update_hud(delta)
+
+
+func _update_theme_energy() -> void:
+	var energy := 0.0
+	if effects.has("speed_up"):
+		energy = 1.0
+	elif effects.has("double"):
+		energy = 0.6
+	elif effects.has("magnet"):
+		energy = 0.4
+	snake_view.set_energy(energy)
+	board_view.set_energy(energy)
 
 
 # ---------------------------------------------------------------- 流程
@@ -220,6 +354,8 @@ func start_game() -> void:
 	tick_accum = 0.0
 	go_timer = 0.0
 	rig.add_shake(0.0)
+	rig.add_punch(0.0)
+	postfx.clear()
 
 	_setup_board()
 	_spawn_food()
@@ -242,6 +378,8 @@ func enter_menu() -> void:
 	dead = false
 	effects.clear()
 	shield_charge = false
+	rig.add_punch(0.0)
+	postfx.clear()
 	SaveData.save_data()
 	_setup_board()
 	_spawn_food()
@@ -293,6 +431,8 @@ func _setup_board() -> void:
 	snake_view.update_snake(cells, cells, 1.0, direction, false, false)
 	food_view.configure(food_kind, colors)
 	rig.configure(cols, rows)
+	if _dust_process != null:
+		_dust_process.emission_box_extents = Vector3(cols * 0.75 + 2.0, 3.5, rows * 0.75 + 2.0)
 
 
 func _spawn_food() -> void:
@@ -338,6 +478,7 @@ func _tick() -> void:
 	if portals.has(new_head):
 		new_head = portals[new_head]
 		_burst(cell_world(cells[0]) + Vector3(0.0, 0.3, 0.0), colors["special"], 14, 4.0)
+		postfx.pulse(0.7)
 
 	if _blocked(new_head):
 		if shield_charge:
@@ -345,6 +486,7 @@ func _tick() -> void:
 			effects.erase("shield")
 			hud.set_effects(effects)
 			rig.add_shake(0.35)
+			postfx.pulse(0.9)
 			Sfx.play("shield")
 			return
 		_die()
@@ -370,6 +512,9 @@ func _tick() -> void:
 	var world := cell_world(new_head) + Vector3(0.0, 0.3, 0.0)
 	_spawn_popup("+%d" % gain, world)
 	_burst(world, _food_color(), 24, 5.0)
+	rig.add_punch(0.9)
+	postfx.pulse(0.6)
+	board_view.set_energy(1.0)
 
 	if food_kind == "":
 		Sfx.play("eat")
@@ -403,6 +548,9 @@ func _die() -> void:
 	SaveData.save_data()
 	Sfx.play("death")
 	hud.flash(Color(colors["danger"], 0.55))
+	postfx.flash(colors["danger"], 0.4)
+	postfx.pulse(1.0)
+	postfx.set_desaturate(0.6)
 	rig.add_shake(1.1)
 	_burst(cell_world(cells[0]) + Vector3(0.0, 0.4, 0.0), colors["danger"], 40, 6.5)
 	snake_view.update_snake(previous_cells, cells, 1.0, direction, true, false)
@@ -585,18 +733,32 @@ func _toggle_mute() -> void:
 func _apply_theme() -> void:
 	colors = Palette.get_theme(theme_id)
 
-	_sky_material.sky_top_color = colors["bg_top"].lightened(0.03)
-	_sky_material.sky_horizon_color = colors["bg_top"].lightened(0.3)
-	_sky_material.ground_bottom_color = colors["bg_bottom"]
-	_sky_material.ground_horizon_color = colors["bg_bottom"].lightened(0.15)
-	_sky_material.sky_energy_multiplier = 0.55
-	_sky_material.ground_energy_multiplier = 0.3
+	if _sky_shader_material != null:
+		_sky_shader_material.set_shader_parameter("top_color", colors["bg_top"])
+		_sky_shader_material.set_shader_parameter("horizon_color", colors["bg_top"].lightened(0.22))
+		_sky_shader_material.set_shader_parameter("nebula_color", colors["glow"])
+		_sky_shader_material.set_shader_parameter("nebula_color_b", colors["accent_alt"])
+		_sky_shader_material.set_shader_parameter("nebula_strength", 0.4)
+	if _sky_material != null:
+		_sky_material.sky_top_color = colors["bg_top"].lightened(0.03)
+		_sky_material.sky_horizon_color = colors["bg_top"].lightened(0.3)
+		_sky_material.ground_bottom_color = colors["bg_bottom"]
+		_sky_material.ground_horizon_color = colors["bg_bottom"].lightened(0.15)
+		_sky_material.sky_energy_multiplier = 0.55
+		_sky_material.ground_energy_multiplier = 0.3
+
 	_environment.fog_light_color = colors["bg_top"].lightened(0.12)
-	_environment.fog_light_energy = 0.7
+	if _is_forward_plus():
+		_environment.volumetric_fog_albedo = colors["bg_top"].lightened(0.32)
+		_environment.volumetric_fog_emission = colors["glow"] * 0.03
 	_fill_light.light_color = colors["glow"]
-	_fill_light.light_energy = 0.75
+	_rim_light.light_color = colors["accent_alt"].lightened(0.2)
+
+	if _dust_material != null:
+		_dust_material.albedo_color = Color(colors["accent"], 0.5)
 
 	hud.apply_theme(colors)
+	postfx.configure(colors, not _is_forward_plus())
 	if is_node_ready():
 		board_view.configure(cols, rows, walls, portals, colors)
 		snake_view.configure(cols, rows, colors)

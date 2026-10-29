@@ -1,7 +1,8 @@
 class_name FoodView
 extends Node3D
 
-## 3D 食物/道具：自发光网格 + 悬浮光环 + 点光源 + 环绕粒子。
+## 3D 食物/道具：自发光内核 + 悬浮光环 + 地面光环 + 冲天光柱 + 点光源 + 环绕粒子。
+## 光柱让玩家在任意镜头角度都能一眼定位食物。
 
 const KIND_COLORS := {
 	"speed_up": Color("#ffd166"),
@@ -19,6 +20,10 @@ var _mesh: MeshInstance3D
 var _material: ShaderMaterial
 var _ring: MeshInstance3D
 var _ring_material: StandardMaterial3D
+var _ground_ring: MeshInstance3D
+var _ground_ring_material: StandardMaterial3D
+var _beam: MeshInstance3D
+var _beam_material: ShaderMaterial
 var _light: OmniLight3D
 var _particles: GPUParticles3D
 var _particle_material: StandardMaterial3D
@@ -37,29 +42,62 @@ func _ready() -> void:
 
 	_ring_material = StandardMaterial3D.new()
 	_ring_material.emission_enabled = true
-	_ring_material.emission_energy_multiplier = 1.8
-	_ring_material.roughness = 0.25
-	_ring_material.metallic = 0.6
+	_ring_material.emission_energy_multiplier = 3.0
+	_ring_material.roughness = 0.2
+	_ring_material.metallic = 0.7
 	_ring = MeshInstance3D.new()
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.5
-	torus.outer_radius = 0.56
-	torus.rings = 32
+	torus.outer_radius = 0.585
+	torus.rings = 40
 	torus.ring_segments = 8
 	_ring.mesh = torus
 	_ring.rotation = Vector3(PI * 0.5, 0.0, 0.0)
 	_ring.material_override = _ring_material
 	_pivot.add_child(_ring)
 
+	# 地面光环：把食物和棋盘连起来，避免“漂浮的图标”感
+	_ground_ring_material = StandardMaterial3D.new()
+	_ground_ring_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ground_ring_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ground_ring_material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_ground_ring_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var ground_torus := TorusMesh.new()
+	ground_torus.inner_radius = 0.52
+	ground_torus.outer_radius = 0.72
+	ground_torus.rings = 40
+	ground_torus.ring_segments = 6
+	_ground_ring = MeshInstance3D.new()
+	_ground_ring.mesh = ground_torus
+	_ground_ring.material_override = _ground_ring_material
+	_ground_ring.position = Vector3(0.0, -0.5, 0.0)
+	add_child(_ground_ring)
+
+	_beam_material = ShaderMaterial.new()
+	_beam_material.shader = preload("res://shaders/beam.gdshader")
+	_beam = MeshInstance3D.new()
+	var beam_mesh := CylinderMesh.new()
+	beam_mesh.top_radius = 0.06
+	beam_mesh.bottom_radius = 0.42
+	beam_mesh.height = 6.5
+	beam_mesh.radial_segments = 20
+	beam_mesh.rings = 1
+	_beam.mesh = beam_mesh
+	_beam.material_override = _beam_material
+	_beam.position = Vector3(0.0, 2.7, 0.0)
+	_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_beam)
+
 	_light = OmniLight3D.new()
-	_light.omni_range = 4.0
-	_light.light_energy = 1.2
+	_light.omni_range = 5.0
+	_light.light_energy = 1.4
 	_light.shadow_enabled = false
+	_light.light_volumetric_fog_energy = 2.0
 	_pivot.add_child(_light)
 
 	_particles = GPUParticles3D.new()
-	_particles.amount = 18
-	_particles.lifetime = 1.3
+	_particles.amount = 26
+	_particles.lifetime = 1.4
 	_particles.preprocess = 1.0
 	_particles.local_coords = false
 	var process := ParticleProcessMaterial.new()
@@ -67,18 +105,18 @@ func _ready() -> void:
 	process.emission_sphere_radius = 0.42
 	process.direction = Vector3(0.0, 1.0, 0.0)
 	process.spread = 180.0
-	process.initial_velocity_min = 0.15
-	process.initial_velocity_max = 0.6
-	process.gravity = Vector3(0.0, 0.35, 0.0)
-	process.scale_min = 0.5
-	process.scale_max = 1.2
+	process.initial_velocity_min = 0.2
+	process.initial_velocity_max = 0.9
+	process.gravity = Vector3(0.0, 0.5, 0.0)
+	process.scale_min = 0.4
+	process.scale_max = 1.3
 	_particles.process_material = process
 	var spark := SphereMesh.new()
-	spark.radius = 0.035
-	spark.height = 0.07
+	spark.radius = 0.028
+	spark.height = 0.056
 	_particle_material = StandardMaterial3D.new()
 	_particle_material.emission_enabled = true
-	_particle_material.emission_energy_multiplier = 4.0
+	_particle_material.emission_energy_multiplier = 6.0
 	spark.material = _particle_material
 	_particles.draw_pass_1 = spark
 	_particles.visibility_aabb = AABB(Vector3(-2.0, -2.0, -2.0), Vector3(4.0, 4.0, 4.0))
@@ -90,10 +128,14 @@ func configure(new_kind: String, new_colors: Dictionary) -> void:
 	colors = new_colors
 	var color := current_color()
 	_material.set_shader_parameter("base_color", color)
+	_material.set_shader_parameter("core_color", color.lightened(0.55))
 	_mesh.mesh = _shape_mesh(kind)
 	_mesh.scale = Vector3(1.55, 1.0, 1.0) if kind == "double" else Vector3.ONE
-	_ring_material.albedo_color = Color(color, 0.3)
+	_ring_material.albedo_color = Color(color, 0.35)
 	_ring_material.emission = color
+	_ground_ring_material.albedo_color = Color(color, 0.55)
+	_beam_material.set_shader_parameter("beam_color", color)
+	_beam_material.set_shader_parameter("strength", 0.55 if kind == "" else 0.75)
 	_light.light_color = color
 	_particle_material.albedo_color = color
 	_particle_material.emission = color
@@ -112,7 +154,10 @@ func _process(delta: float) -> void:
 	_pivot.rotation.y += delta * 0.9
 	var pulse := 1.0 + sin(_time * 2.0) * 0.06
 	_ring.scale = Vector3(pulse, pulse, pulse)
-	_light.light_energy = 1.1 + sin(_time * 3.5) * 0.25
+	_ground_ring.scale = Vector3(pulse, 1.0, pulse)
+	_beam.rotation.y += delta * 0.35
+	_beam_material.set_shader_parameter("strength", (0.5 if kind == "" else 0.7) + sin(_time * 3.0) * 0.12)
+	_light.light_energy = 1.3 + sin(_time * 3.5) * 0.35
 
 
 static var _shape_cache: Dictionary = {}
@@ -154,4 +199,5 @@ func _shape_mesh(shape_kind: String) -> Mesh:
 			apple.radius = 0.26
 			apple.height = 0.52
 			result = apple
+	_shape_cache[shape_kind] = result
 	return result
