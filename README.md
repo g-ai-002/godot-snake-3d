@@ -13,6 +13,17 @@
 - 自由视角：右键拖动环绕、滚轮缩放、Q/E 左右转动，死亡时镜头抖动
 - 开局倒计时、暂停、结算、新纪录、最高分持久化，键盘与触屏滑动操作
 
+## 下载
+
+### v0.2.0（当前版本）
+
+- [Windows ZIP](https://github.com/g-ai-002/godot-snake-3d/releases/tag/v0.2.0)
+- [Web 在线试玩](https://g-ai-002.github.io/godot-snake-3d/v0.2.0/)
+
+### 历史版本
+
+- [v0.1.0](https://github.com/g-ai-002/godot-snake-3d/releases/tag/v0.1.0)
+
 ## 3D 引擎能力点
 
 | 能力                | 位置                        | 说明                                                   |
@@ -62,7 +73,7 @@ godot --headless --path . res://tests/smoke_test.tscn
 ```
 
 首次运行（或删除 `.godot` 后）需先执行 `--import` 生成全局类缓存，CI 已包含这一步。
-测试场景为 `tests/smoke_test.tscn`，共 59 项断言，退出码非 0 表示失败。
+测试场景为 `tests/smoke_test.tscn`，共 68 项断言，退出码非 0 表示失败。
 
 ## 导出
 
@@ -153,6 +164,21 @@ Windows 微软雅黑、macOS 苹方、Linux 思源黑体/文泉驿，最后回�
 Web 端拿不到系统字体，所以 `scripts/ui_font.gd` 会优先加载
 `res://assets/fonts/web_cjk.otf`：CI 导出前下载 Noto Sans SC，按源码里实际
 出现的字符裁剪成子集（通常几百 KB，不入库），桌面端没有该文件时仍用系统字体。
+
+## 版本历史
+
+### v0.2.0（当前版本）
+
+- 新增 Web 导出预设，网页端切换到 Compatibility 渲染器并关闭线程支持，可直接静态托管
+- CI 新增 Web 构建与 GitHub Pages 版本化发布：tag 构建进入 `vX.Y.Z/`，手动触发进入 `debug/`
+- 复用分数飘字与爆散粒子节点、缓存食物网格，降低连续吃食物时的创建开销
+- 修正出生蛇身顺序，蛇头回到数组首位，避免开局首格自撞
+- 补齐飘字与粒子池成员声明，并在复用前校验 Tween 元数据
+- 冒烟测试补充出生顺序与自撞用例，断言增至 68 项
+
+### v0.1.0
+
+- 首个正式版本：六种关卡、五种道具、三套配色、MultiMesh 蛇身、动态光影与运行时音频合成
 
 ## 许可证
 
