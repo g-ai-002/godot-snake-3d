@@ -12,3 +12,9 @@ build/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# CI 生成的中文字体子集（不入库）
+assets/fonts/
+
+.idea
+.qwen

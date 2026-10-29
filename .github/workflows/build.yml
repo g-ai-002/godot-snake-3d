@@ -142,8 +142,221 @@ jobs:
           path: ${{ env.APP_NAME }}-${{ needs.metadata.outputs.app_version }}-windows-x86_64.zip
           retention-days: 1
 
+  build-web:
+    needs: [ metadata, test ]
+    runs-on: ubuntu-latest
+    name: 🌐 构建 Web 并发布 Pages
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    concurrency:
+      group: pages-${{ github.event.repository.name }}
+      cancel-in-progress: false
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 🧰 安装 Godot 与 Web 导出模板
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -fsSL --retry 3 --retry-delay 5 -o godot.zip "${BASE}/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          chmod +x "Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          echo "GODOT=$PWD/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 --retry-delay 5 -o templates.tpz "${BASE}/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+          unzip -q templates.tpz -d "$HOME/.local/share/godot/export_templates"
+          mv "$HOME/.local/share/godot/export_templates/templates" "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          echo "✅ Godot 与 Web 导出模板已就绪"
+
+      - name: 🔠 生成 Web 中文字体子集
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/fonttools-venv
+          /tmp/fonttools-venv/bin/pip install --quiet --disable-pip-version-check fonttools
+          /tmp/fonttools-venv/bin/python tools/subset_web_font.py
+          ls -lh assets/fonts
+
+      - name: 📥 导入资源
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . --import
+
+      - name: 🧭 计算发布路径
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "VERSION_PATH=v${{ needs.metadata.outputs.app_version }}" >> "$GITHUB_ENV"
+            echo "IS_RELEASE=true" >> "$GITHUB_ENV"
+            echo "📝 发布路径: v${{ needs.metadata.outputs.app_version }}"
+          else
+            echo "VERSION_PATH=debug" >> "$GITHUB_ENV"
+            echo "IS_RELEASE=false" >> "$GITHUB_ENV"
+            echo "🧪 预览路径: debug"
+          fi
+
+      - name: 🌐 导出 Web 产物
+        run: |
+          set -euo pipefail
+          mkdir -p build/web
+          if ! "$GODOT" --headless --path . --export-release "Web" build/web/index.html; then
+            # 兜底：个别 Godot 版本不认 rendering_method.web 覆盖，此时整项目临时切成 Compatibility
+            echo "⚠️ 默认渲染器导出失败，临时切换项目渲染器为 gl_compatibility 后重试"
+            sed -i 's|^renderer/rendering_method=".*"$|renderer/rendering_method="gl_compatibility"|' project.godot
+            "$GODOT" --headless --path . --import
+            "$GODOT" --headless --path . --export-release "Web" build/web/index.html
+          fi
+          cp assets/fonts/OFL.txt build/web/
+          du -sh build/web
+          ls -lh build/web | head -10
+
+      - name: 🗜️ 打包 Web 产物
+        run: |
+          set -euo pipefail
+          zip_name="${APP_NAME}-${{ needs.metadata.outputs.app_version }}-web.zip"
+          rm -f "$zip_name"
+          ( cd build/web && zip -qr "$GITHUB_WORKSPACE/$zip_name" . )
+          du -sh "$zip_name"
+          unzip -l "$zip_name" | tail -5
+
+      - name: ⬆️ 上传 Web 产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APP_NAME }}-${{ needs.metadata.outputs.app_version }}-web
+          path: ${{ env.APP_NAME }}-${{ needs.metadata.outputs.app_version }}-web.zip
+          retention-days: 1
+
+      - name: 📚 检出 gh-pages 站点分支
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
+            echo "⏳ gh-pages 分支不存在，用空孤儿提交初始化"
+            empty_tree=$(git mktree < /dev/null)
+            init_commit=$(git commit-tree "$empty_tree" -m "🌐 初始化 GitHub Pages")
+            git push origin "$init_commit:refs/heads/gh-pages"
+          fi
+
+          git fetch --no-tags --depth=1 origin gh-pages:refs/remotes/origin/gh-pages
+          git worktree add --detach pages refs/remotes/origin/gh-pages
+          echo "📂 站点现有版本目录："
+          find pages -maxdepth 1 -mindepth 1 -type d -name 'v*' -printf '  📁 %f\n' | sort -V || true
+
+      - name: 🖻 写入站点目录（保留历史版本）
+        run: |
+          set -euo pipefail
+          rm -rf "pages/${VERSION_PATH}"
+          mkdir -p "pages/${VERSION_PATH}"
+          cp -a build/web/. "pages/${VERSION_PATH}/"
+          touch pages/.nojekyll
+          echo "✅ 已写入 pages/${VERSION_PATH}"
+          du -sh "pages/${VERSION_PATH}"
+
+      - name: 🎲 生成版本索引页
+        run: |
+          set -euo pipefail
+          mapfile -t versions < <(find pages -maxdepth 1 -mindepth 1 -type d -name 'v*' -printf '%f\n' | sort -V -r)
+          has_debug=false
+          if [ -d pages/debug ]; then has_debug=true; fi
+          if [ "${#versions[@]}" -eq 0 ] && [ "$has_debug" != true ]; then
+            echo "❌ 站点里既没有版本目录也没有 debug 目录"
+            exit 1
+          fi
+          latest="${versions[0]:-}"
+          app_title=$(grep -oP 'config/name="\K[^"]+' project.godot | head -1)
+          now=$(date -u '+%Y-%m-%d %H:%M UTC')
+          echo "📌 正式版本 ${#versions[@]} 个（最新 ${latest:-无}），debug 预览: ${has_debug}"
+
+          : > /tmp/latest.html
+          if [ -n "$latest" ]; then
+            printf '    <a class="hero" href="./%s/">\n      <span class="hero-label">最新正式版本</span>\n      <span class="hero-ver">%s</span>\n      <span class="hero-go">▶ 立即开始游戏</span>\n    </a>\n' \
+              "$latest" "$latest" >> /tmp/latest.html
+          elif [ "$has_debug" = true ]; then
+            printf '    <a class="hero" href="./debug/">\n      <span class="hero-label">暂无正式版本 · 先玩调试版</span>\n      <span class="hero-ver">debug</span>\n      <span class="hero-go">▶ 立即开始游戏</span>\n    </a>\n' \
+              >> /tmp/latest.html
+          fi
+
+          : > /tmp/release-items.html
+          for i in "${!versions[@]}"; do
+            v="${versions[$i]}"
+            badge=""
+            if [ "$i" -eq 0 ]; then badge='<span class="badge">最新</span>'; fi
+            printf '        <a class="card" href="./%s/"><span class="ver">%s%s</span><span class="go">进入试玩 →</span></a>\n' \
+              "$v" "$v" "$badge" >> /tmp/release-items.html
+          done
+          if [ "${#versions[@]}" -eq 0 ]; then
+            printf '        <p class="empty">暂无正式版本</p>\n' >> /tmp/release-items.html
+          fi
+
+          : > /tmp/debug-items.html
+          if [ "$has_debug" = true ]; then
+            printf '        <a class="card" href="./debug/"><span class="ver">debug<span class="badge badge-debug">预览</span></span><span class="go">最新一次构建 →</span></a>\n' \
+              >> /tmp/debug-items.html
+          else
+            printf '        <p class="empty">暂无调试版本</p>\n' >> /tmp/debug-items.html
+          fi
+
+          awk -v title="$app_title" -v repo="${{ github.repository }}" -v updated="$now" \
+              -v latest="/tmp/latest.html" -v releases="/tmp/release-items.html" -v debugf="/tmp/debug-items.html" '
+            /__LATEST__/ {
+              while ((getline line < latest) > 0) print line;
+              close(latest);
+              next
+            }
+            /__RELEASES__/ {
+              while ((getline line < releases) > 0) print line;
+              close(releases);
+              next
+            }
+            /__DEBUG__/ {
+              while ((getline line < debugf) > 0) print line;
+              close(debugf);
+              next
+            }
+            { gsub(/__TITLE__/, title); gsub(/__REPO__/, repo); gsub(/__UPDATED__/, updated); print }
+          ' .github/pages/index.template.html > pages/index.html
+
+          : > /tmp/versions.jsonl
+          if [ "$has_debug" = true ]; then
+            printf '{"version":"debug","url":"./debug/","latest":false,"debug":true}\n' >> /tmp/versions.jsonl
+          fi
+          for i in "${!versions[@]}"; do
+            v="${versions[$i]}"
+            is_latest=false
+            if [ "$i" -eq 0 ]; then is_latest=true; fi
+            jq -cn --arg v "$v" --argjson latest "$is_latest" \
+              '{version: $v, url: ("./" + $v + "/"), latest: $latest, debug: false}' >> /tmp/versions.jsonl
+          done
+          jq -s . /tmp/versions.jsonl > pages/versions.json
+
+          echo "--- 🗂️ versions.json ---"
+          cat pages/versions.json
+
+      - name: 🚀 提交并推送站点
+        run: |
+          set -euo pipefail
+          cd pages
+          git add -A
+          if git diff --cached --quiet; then
+            echo "⏩ 站点内容无变化，跳过提交"
+            exit 0
+          fi
+          if [ "$IS_RELEASE" = true ]; then
+            git commit -q -m "🌐 发布 Web 版本 ${VERSION_PATH}"
+          else
+            git commit -q -m "🧪 更新 Web 预览站点 ${VERSION_PATH}"
+          fi
+          git push origin HEAD:refs/heads/gh-pages
+          echo "✅ 已推送到 gh-pages"
+          echo "🔗 https://${{ github.repository_owner }}.github.io/${{ env.APP_NAME }}/${VERSION_PATH}/"
+
   release:
-    needs: [ build-windows ]
+    needs: [ build-windows, build-web ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     name: 🚀 发布 GitHub Release
