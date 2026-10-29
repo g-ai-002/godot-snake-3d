@@ -76,6 +76,12 @@ var _sky_material: ProceduralSkyMaterial
 var _key_light: DirectionalLight3D
 var _fill_light: OmniLight3D
 
+# 飘字与爆散粒子常驻复用，避免每次吃食物都新建节点/材质/网格造成掉帧。
+var _popup_pool: Array[Label3D] = []
+var _popup_index := 0
+var _burst_pool: Array[GPUParticles3D] = []
+var _burst_index := 0
+
 @onready var board_view: BoardView = $Board
 @onready var snake_view: SnakeView = $Snake
 @onready var food_view: FoodView = $Food
@@ -659,9 +665,10 @@ func _spawn_popup(text: String, world: Vector3) -> void:
 	var label := _popup_pool[_popup_index]
 	_popup_index = (_popup_index + 1) % _popup_pool.size()
 
-	var running: Variant = label.get_meta("fx_tween", null)
-	if running is Tween and running.is_valid():
-		running.kill()
+	if label.has_meta("fx_tween"):
+		var running: Variant = label.get_meta("fx_tween")
+		if running is Tween and running.is_valid():
+			running.kill()
 
 	label.text = text
 	label.outline_modulate = Color(colors["bg_bottom"], 0.95)
