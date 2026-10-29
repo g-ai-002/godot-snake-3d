@@ -66,15 +66,35 @@ godot --headless --path . res://tests/smoke_test.tscn
 
 ## 导出
 
-`export_presets.cfg` 提供 **Windows Desktop** 预设，输出为单个内嵌 PCK 的 exe：
+`export_presets.cfg` 提供 **Windows Desktop** 与 **Web** 两个预设：
+
+- **Windows** → `build/windows/Snake3D.exe`（单文件，内嵌 PCK）
+- **Web** → `build/web/index.html`（单线程，可静态托管）
 
 ```bash
 godot --headless --path . --export-release "Windows Desktop" build/windows/Snake3D.exe
+godot --headless --path . --export-release "Web" build/web/index.html
 ```
 
-3D 版使用 Forward+ 渲染器，因此不提供 Web 导出（Web 目前需要 Compatibility
-渲染器）；如需网页演示，可在项目设置中临时切换到 Compatibility 后再导出，但
-Glow、SSAO 等效果会缺失。
+导出前需要安装对应版本的导出模板。Web 构建还需要中文字体子集
+`assets/fonts/web_cjk.otf`：CI 会在构建时临时生成（不入库），本地可执行
+`python tools/subset_web_font.py` 生成；否则 Web 页面中文会回退为方框。
+本地预览需要走 HTTP，直接打开 `index.html` 会因浏览器安全策略失败：
+
+```bash
+python -m http.server 8000 --directory build/web
+```
+
+Web 版由 `project.godot` 的 `renderer/rendering_method.web="gl_compatibility"`
+切成 Compatibility 渲染器，桌面端仍是 Forward+，因此网页里没有 Glow、SSAO
+与软阴影细节，玩法与桌面端一致。预设关闭了线程支持
+（`variant/thread_support=false`），可以直接部署到 GitHub Pages 这类无法设置
+COOP/COEP 响应头的静态托管。
+
+推送 `v*` tag 或手动触发工作流后，CI 会把 Web 产物发布到 `gh-pages` 分支
+（首次使用需在仓库 Settings → Pages 中选择该分支）：tag 构建进入
+`vX.Y.Z/` 目录并保留历史版本，手动触发进入 `debug/`，同时重新生成站点索引页
+与 `versions.json`，Web ZIP 也会作为 Release 附件上传。
 
 ## 目录结构
 
@@ -97,6 +117,10 @@ Glow、SSAO 等效果会缺失。
 │   ├── board.gdshader
 │   ├── emissive.gdshader
 │   └── food.gdshader
+├── tools/subset_web_font.py   # 生成 Web 中文字体子集（CI 使用）
+├── .github/
+│   ├── pages/index.template.html  # gh-pages 站点索引页模板
+│   └── workflows/build.yml        # 冒烟测试 + Windows/Web 构建 + Release
 └── tests/smoke_test.tscn
 ```
 
@@ -125,6 +149,10 @@ Glow、SSAO 等效果会缺失。
 界面不自带字体文件，由 `scripts/ui_font.gd` 通过 `SystemFont` 读取系统字体：
 Windows 微软雅黑、macOS 苹方、Linux 思源黑体/文泉驿，最后回退到 `sans-serif`。
 仓库因此不含字体二进制，克隆体积更小。
+
+Web 端拿不到系统字体，所以 `scripts/ui_font.gd` 会优先加载
+`res://assets/fonts/web_cjk.otf`：CI 导出前下载 Noto Sans SC，按源码里实际
+出现的字符裁剪成子集（通常几百 KB，不入库），桌面端没有该文件时仍用系统字体。
 
 ## 许可证
 
