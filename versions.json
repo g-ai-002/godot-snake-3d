@@ -4,5 +4,11 @@
     "url": "./debug/",
     "latest": false,
     "debug": true
+  },
+  {
+    "version": "v0.2.0",
+    "url": "./v0.2.0/",
+    "latest": true,
+    "debug": false
   }
 ]
