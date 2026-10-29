@@ -115,7 +115,12 @@ func _process(delta: float) -> void:
 	_light.light_energy = 1.1 + sin(_time * 3.5) * 0.25
 
 
+static var _shape_cache: Dictionary = {}
+
+
 func _shape_mesh(shape_kind: String) -> Mesh:
+	if _shape_cache.has(shape_kind):
+		return _shape_cache[shape_kind]
 	var result: Mesh
 	match shape_kind:
 		"speed_up":

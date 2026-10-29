@@ -481,31 +481,41 @@ func set_effects(effects: Dictionary) -> void:
 	_last_effects = effects.duplicate()
 	var signature := ""
 	for key in effects:
-		signature += "%s:%d;" % [key, int(ceil(float(effects[key])))]
-	if signature == _effect_signature:
-		return
-	_effect_signature = signature
+		signature += "%s;" % key
 
-	for child in _effects_box.get_children():
-		child.queue_free()
+	# 只有道具种类变化时才重建胶囊，剩余时间只刷新文字，避免每秒重建节点掉帧。
+	if signature != _effect_signature:
+		_effect_signature = signature
+		for child in _effects_box.get_children():
+			_effects_box.remove_child(child)
+			child.queue_free()
 
+		for key in effects:
+			var color := _effect_color(key)
+			var chip := PanelContainer.new()
+			var style := StyleBoxFlat.new()
+			style.bg_color = Color(color.r, color.g, color.b, 0.14)
+			style.border_color = Color(color.r, color.g, color.b, 0.65)
+			style.set_border_width_all(1)
+			style.set_corner_radius_all(8)
+			style.content_margin_left = 10
+			style.content_margin_right = 10
+			style.content_margin_top = 3
+			style.content_margin_bottom = 3
+			chip.add_theme_stylebox_override("panel", style)
+			var label := _make_label("", 12)
+			label.add_theme_color_override("font_color", color)
+			chip.add_child(label)
+			_effects_box.add_child(chip)
+
+	var index := 0
 	for key in effects:
-		var color := _effect_color(key)
-		var chip := PanelContainer.new()
-		var style := StyleBoxFlat.new()
-		style.bg_color = Color(color.r, color.g, color.b, 0.14)
-		style.border_color = Color(color.r, color.g, color.b, 0.65)
-		style.set_border_width_all(1)
-		style.set_corner_radius_all(8)
-		style.content_margin_left = 10
-		style.content_margin_right = 10
-		style.content_margin_top = 3
-		style.content_margin_bottom = 3
-		chip.add_theme_stylebox_override("panel", style)
-		var label := _make_label("%s %.1fs" % [EFFECT_LABELS.get(key, key), float(effects[key])], 12)
-		label.add_theme_color_override("font_color", color)
-		chip.add_child(label)
-		_effects_box.add_child(chip)
+		if index >= _effects_box.get_child_count():
+			break
+		var chip_label := _effects_box.get_child(index).get_child(0) as Label
+		if chip_label != null:
+			chip_label.text = "%s %.1fs" % [EFFECT_LABELS.get(key, key), float(effects[key])]
+		index += 1
 
 
 func _effect_color(key: String) -> Color:

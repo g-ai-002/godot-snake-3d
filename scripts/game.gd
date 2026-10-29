@@ -5,6 +5,9 @@ extends Node3D
 const COUNTDOWN_TIME := 3.0
 const POWERUP_CHANCE := 0.28
 const BODY_Y := 0.46
+const POPUP_POOL_SIZE := 8
+const BURST_POOL_SIZE := 6
+const BURST_AMOUNT := 44
 
 const EFFECT_DURATIONS := {
 	"speed_up": 6.0,
@@ -84,6 +87,7 @@ func _ready() -> void:
 	rng.randomize()
 	_load_settings()
 	_build_environment()
+	_warm_effects()
 
 	hud.start_pressed.connect(start_game)
 	hud.restart_pressed.connect(start_game)
@@ -360,7 +364,6 @@ func _tick() -> void:
 	var world := cell_world(new_head) + Vector3(0.0, 0.3, 0.0)
 	_spawn_popup("+%d" % gain, world)
 	_burst(world, _food_color(), 24, 5.0)
-	rig.add_shake(0.18)
 
 	if food_kind == "":
 		Sfx.play("eat")
@@ -605,62 +608,97 @@ func _update_hud(delta: float) -> void:
 	hud.set_effects(effects)
 
 
+## 开局一次性建好飘字与爆散粒子池，运行时只改参数复用，避免吃食物时卡帧。
+func _warm_effects() -> void:
+	for i in POPUP_POOL_SIZE:
+		var label := Label3D.new()
+		label.font = UiFont.get_font()
+		label.font_size = 64
+		label.pixel_size = 0.006
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.outline_size = 12
+		label.visible = false
+		add_child(label)
+		_popup_pool.append(label)
+
+	for i in BURST_POOL_SIZE:
+		var particles := GPUParticles3D.new()
+		particles.amount = BURST_AMOUNT
+		particles.lifetime = 0.75
+		particles.one_shot = true
+		particles.explosiveness = 1.0
+		particles.emitting = false
+
+		var process := ParticleProcessMaterial.new()
+		process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		process.emission_sphere_radius = 0.22
+		process.direction = Vector3(0.0, 1.0, 0.0)
+		process.spread = 180.0
+		process.initial_velocity_min = 1.75
+		process.initial_velocity_max = 5.0
+		process.gravity = Vector3(0.0, -2.5, 0.0)
+		process.scale_min = 0.6
+		process.scale_max = 1.5
+		particles.process_material = process
+
+		var mesh := SphereMesh.new()
+		mesh.radius = 0.05
+		mesh.height = 0.1
+		var material := StandardMaterial3D.new()
+		material.emission_enabled = true
+		material.emission_energy_multiplier = 3.5
+		mesh.material = material
+		particles.draw_pass_1 = mesh
+
+		add_child(particles)
+		_burst_pool.append(particles)
+
+
 func _spawn_popup(text: String, world: Vector3) -> void:
-	var label := Label3D.new()
+	var label := _popup_pool[_popup_index]
+	_popup_index = (_popup_index + 1) % _popup_pool.size()
+
+	var running: Variant = label.get_meta("fx_tween", null)
+	if running is Tween and running.is_valid():
+		running.kill()
+
 	label.text = text
-	label.font = UiFont.get_font()
-	label.font_size = 64
-	label.pixel_size = 0.006
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
-	label.outline_size = 12
 	label.outline_modulate = Color(colors["bg_bottom"], 0.95)
 	label.modulate = colors["accent"]
 	label.position = world + Vector3(0.0, 1.0, 0.0)
-	add_child(label)
+	label.visible = true
 
 	var tween := label.create_tween()
 	tween.set_parallel(true)
 	tween.tween_property(label, "position:y", label.position.y + 1.0, 0.8) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tween.tween_property(label, "modulate:a", 0.0, 0.7).set_delay(0.3)
-	tween.chain().tween_callback(label.queue_free)
+	tween.chain().tween_callback(_hide_popup.bind(label))
+	label.set_meta("fx_tween", tween)
+
+
+func _hide_popup(label: Label3D) -> void:
+	label.visible = false
 
 
 func _burst(world: Vector3, color: Color, amount: int, speed: float) -> void:
-	var particles := GPUParticles3D.new()
-	particles.amount = amount
-	particles.lifetime = 0.75
-	particles.one_shot = true
-	particles.explosiveness = 1.0
-	particles.position = world
+	var particles := _burst_pool[_burst_index]
+	_burst_index = (_burst_index + 1) % _burst_pool.size()
 
-	var process := ParticleProcessMaterial.new()
-	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	process.emission_sphere_radius = 0.22
-	process.direction = Vector3(0.0, 1.0, 0.0)
-	process.spread = 180.0
+	particles.position = world
+	particles.amount = maxi(amount, 1)
+	particles.emitting = true
+	particles.restart()
+
+	var process := particles.process_material as ParticleProcessMaterial
 	process.initial_velocity_min = speed * 0.35
 	process.initial_velocity_max = speed
-	process.gravity = Vector3(0.0, -2.5, 0.0)
-	process.scale_min = 0.6
-	process.scale_max = 1.5
-	particles.process_material = process
 
-	var mesh := SphereMesh.new()
-	mesh.radius = 0.05
-	mesh.height = 0.1
-	var material := StandardMaterial3D.new()
+	var mesh := particles.draw_pass_1 as SphereMesh
+	var material := mesh.material as StandardMaterial3D
 	material.albedo_color = color
-	material.emission_enabled = true
 	material.emission = color
-	material.emission_energy_multiplier = 3.5
-	mesh.material = material
-	particles.draw_pass_1 = mesh
-
-	add_child(particles)
-	particles.emitting = true
-	get_tree().create_timer(1.4).timeout.connect(particles.queue_free)
 
 
 func _food_color() -> Color:
